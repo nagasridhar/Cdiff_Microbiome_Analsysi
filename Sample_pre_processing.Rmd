@@ -1,0 +1,242 @@
+---
+title: "Cdiff_Sample_processing"
+author: "Naga"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    include = TRUE, echo = FALSE,
+    warning = FALSE, message = FALSE, 
+    fig.width = 6, fig.asp = 3/4
+)
+```
+
+## Data Pre-processing
+
+This markdown maintains the pre-processing of the metadata information for all the samples. 
+
+```{r load libraries, include=TRUE}
+library(tidyverse)
+library(readxl)
+```
+
+ 
+Reading in the excel file obtained from the lab.  
+```{r sample_data, include=TRUE}
+sample_info <- readxl::read_excel(("~/Desktop/GitHub/Cdiff/data/Metadata_2.13.2019.xlsx"),na = c("", "NA", "Unknown"))
+glimpse(sample_info)
+
+
+sample_info <- sample_info %>%
+    # replace the problematic `SN #` var
+    rename("Sample_number" = `SN #`) %>%
+    # standardize case
+    rename_all(~ifelse(str_detect(., " "), str_to_sentence(.), .)) %>%
+    # replace spaces with underscores
+    rename_all(~str_replace_all(., "\\.? ", "_"))
+
+```
+
+The last column is an empty column, hence removing it. 
+
+```{r sample cleaning, include=TRUE}
+sample_info %>% filter(!is.na(...18)) %>% unlist
+
+
+## There are 2 samples with no metadata and which wont be included in the analysis.
+
+sample_info %>%
+    filter(is.na(Species) | is.na(C_diff_lab_positive)) %>%
+    select(Sample_number:Species, C_diff_lab_positive, everything())
+
+sample_info <- sample_info %>%
+    filter(!is.na(Species)) %>%
+    select(-...18)
+```
+
+
+## Checking and fixing all variables
+
+```{r cleaning data, include=TRUE}
+sample_info <- sample_info %>%
+    mutate_at("Sample_number", as.integer) %>%
+    # It is safer to replace the dashes with underscores in the sample names
+    # for some analyses in R
+    mutate(Sample = str_replace(Sample, "-", "_")) %>%
+    # IDs submitted to sequencing center (??)
+    rename(Submitted_ID = ID) %>%
+    # IDs in the community sequence data (fastq) files
+    mutate(Sequence_ID = str_replace(Submitted_ID, "_", "-"))
+
+sample_info %>%
+    group_by(Microbiome) %>%
+    count
+sample_info <- sample_info %>%
+    rename(Year_sequenced = Microbiome) %>%
+    mutate(
+        Year_sequenced = factor(Year_sequenced, c("2017", "2018")),
+        Year_sequenced = fct_explicit_na(Year_sequenced, "Not sequenced")
+        )
+sample_info %>%
+    group_by(Year_sequenced) %>%
+    count
+
+sample_info %>%
+    filter(Year_sequenced == "Not sequenced") %>%
+    select(Sample, Submitted_ID, Species, C_diff_lab_positive)
+
+sample_info <- sample_info %>%
+    rename(Host_species = Species)
+sample_info %>%
+    group_by(Host_species) %>%
+    count
+```
+
+## Sex
+```{r Sex}
+##Currently, the `Sex` variable combines sex (M or F) with neuter status (empty string "" for not neutered, and "S" or "C" for spayed or castrated)
+sample_info %>%
+    group_by(Sex) %>%
+    count
+
+##We will keep this original classification in a variable `SexCS` but also create separate Sex and Neutered fields,
+sample_info <- sample_info %>%
+    rename(SexCS = Sex) %>%
+    mutate(
+        Sex = str_sub(SexCS, 1, 1) %>% factor,
+        Neutered = fct_collapse(str_sub(SexCS, 2, 2),
+            "No" = "", "Yes" = "C", "Yes" = "S") %>%
+            fct_relevel("No")
+    ) %>%
+    mutate_at(vars(SexCS, Sex, Neutered), fct_explicit_na, "Not known")
+sample_info %>%
+    select(SexCS, Sex, Neutered) %>%
+    distinct %>%
+    arrange(Sex, Neutered)
+
+```
+
+
+## GI Status 
+
+```{r GI Status}
+sample_info %>% group_by(GI) %>% count
+sample_info <- sample_info %>%
+    rename(GI_status = GI) %>%
+    mutate(GI_status = fct_recode(GI_status,
+            Healthy = "No",
+            `GI condition` = "Yes"
+            ) %>%
+            fct_explicit_na("Not known")
+        )
+sample_info %>% group_by(GI_status) %>% count
+```
+
+
+## Antibiotics
+
+```{r Antibiotics}
+
+##There are three antibiotics fields; defining a uniform naming scheme, and factor levels for antibiotics usage consistent with the main table.
+
+sample_info <- sample_info %>%
+    rename(
+        Ab_status = Ab,
+        Ab_type = Antibiotics,
+        Ab_group = Antibiotic_group
+    )
+sample_info %>%
+    group_by(Ab_status) %>%
+    count
+sample_info <- sample_info %>%
+    mutate(Ab_status = factor(Ab_status, c("Non-treated", "Treated")) %>%
+            fct_explicit_na("Not known"))
+sample_info %>%
+    group_by(Ab_status) %>%
+    count
+
+
+```
+
+## C. difficile
+
+```{r c.diff}
+sample_info <- sample_info %>%
+    rename(
+        CD_lab = C_diff_lab_positive,
+        CD_toxigenic = Toxigenic,
+        CD_ribotype = Ribotype,
+    )
+
+sample_info %>% group_by(CD_lab) %>% count
+sample_info <- sample_info %>%
+    mutate(CD_lab = factor(CD_lab, c("Negative", "Positive")))
+sample_info %>% group_by(CD_lab) %>% count
+###CD toxigenic status factors like in the main table
+
+sample_info %>% group_by(CD_toxigenic) %>% count
+sample_info <- sample_info %>%
+    mutate(CD_toxigenic = fct_recode(CD_toxigenic,
+        `Non-toxigenic` = "No",
+        `Toxigenic` = "Yes")
+    ) 
+sample_info %>% group_by(CD_toxigenic) %>% count %>% arrange(CD_toxigenic)
+
+```
+
+## Ribotypes
+
+```{r ribotypes}
+sample_info %>% group_by(CD_lab, CD_ribotype) %>% count
+sample_info %>% filter(is.na(CD_ribotype)) %>% select(Sample_number, Sample,
+    Host_species)
+
+##5 samples for which Cdiff was recovered are `NA` for ribotype. Three of these samples (CS77-CN47, CS98-CN57, CS185-CN102) were sequenced but not in the database, and two of these samples (CS104-EQ28, CS186-CN103) were not sequenced successfully.
+
+sample_info <- sample_info %>%
+    mutate(CD_ribotype = case_when(
+            Sample %in% c("CS77_CN47", "CS98_CN57", "CS185_CN102") ~ "Not in database",
+            Sample %in% c("CS104_EQ28", "CS186_CN103") ~ "Not sequenced",
+            TRUE ~ CD_ribotype
+            ))
+sample_info %>% group_by(CD_lab, CD_ribotype) %>% count
+```
+
+
+## Age
+
+```{r Age}
+
+sample_info$Age %>% unique %>% unlist %>% sort
+sample_info <- sample_info %>%
+    # Fix typos
+    mutate(Age = str_replace(Age, "yera", "year"))
+##Convert age to a numeric variable in years.
+
+age <- sample_info %>%
+    select(Age) %>%
+    distinct %>%
+    separate(Age, c("Number", "Unit"), sep = " ", 
+        remove = FALSE) %>%
+    mutate(
+        Number = as.numeric(Number),
+        Age_years = case_when(
+            str_detect(Unit, "day") ~ Number / 365,
+            str_detect(Unit, "month") ~ Number / 12,
+            str_detect(Unit, "year") ~ Number,
+            ))
+age %>% arrange(Age_years) %>% print(n=Inf)
+# Note that we kept a row for Age = NA for the join in the next step
+# Join w/ the sample metadata, and set Age to age in years
+sample_info <- left_join(sample_info, age %>% select(Age, Age_years), by = "Age") %>%
+    rename(Age_reported = Age, Age = Age_years)
+```
+
+
+
+
